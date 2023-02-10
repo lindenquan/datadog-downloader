@@ -1,0 +1,15 @@
+{
+    "name": "dd-downloader",
+    "version": "0.2.11",
+    "bin": "./index.mjs",
+    "author": "Linden Quan",
+    "license": "ISC",
+    "repository": "https://github.com/lindenquan/datadog-downloader",
+    "scripts": {
+        "download": "node index.mjs"
+    },
+    "dependencies": {
+        "@datadog/datadog-api-client": "^1.9.0",
+        "dotenv": "^16.0.3"
+    }
+}
