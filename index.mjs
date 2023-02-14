@@ -2,7 +2,7 @@
 import * as dotenv from 'dotenv'
 import * as fs from 'fs'
 import * as path from 'path'
-import { client, v2 } from '@datadog/datadog-api-client'
+import { client, v1, v2 } from '@datadog/datadog-api-client'
 
 dotenv.config()
 let {
@@ -14,6 +14,7 @@ let {
   DD_FROM,
   DD_TO,
   DD_OUTPUT,
+  DD_SLEEP,
 } = process.env
 // const apiInstance = new v2.LogsApi(configuration)
 let DD_FORMAT
@@ -29,6 +30,7 @@ set DD_FROM=2023-02-06T03:24:00Z
 set DD_TO=2023-02-06T03:25:00Z
 set DD_OUTPUT=exported.csv
 set DD_QUERY=service:*
+set DD_SLEEP=1000
 
 npm exec dd-downloader
 `
@@ -42,6 +44,7 @@ export DD_FROM=''
 export DD_TO=''
 export DD_OUTPUT='exported.csv'
 export DD_QUERY='service:*'
+export DD_SLEEP='1000'
 
 npm exec dd-downloader
 `
@@ -58,20 +61,45 @@ const isValidInput = () => {
     return false
   }
 
-  if(!TIEM_FORMAT.test(DD_FROM)) {
+  if (!TIEM_FORMAT.test(DD_FROM)) {
     console.error(`'DD_FROM' must be ISO 8601 format with timezone information`)
     return false
   }
 
-  if(!TIEM_FORMAT.test(DD_TO)) {
+  if (!TIEM_FORMAT.test(DD_TO)) {
     console.error(`'DD_TO' must be ISO 8601 format with timezone information`)
+    return false
+  }
+
+  DD_SLEEP = new Number(DD_SLEEP)
+  if(isNaN(DD_SLEEP) || DD_SLEEP < 0) {
+    console.error(`'DD_SLEEP' must be greater than 0`)
     return false
   }
 
   return true
 }
 
-const checkInput = () => {
+const isValidIndex = async (ddConfig, index) => {
+  if (index === '*') {
+    return true
+  }
+
+  const apiInstance = new v1.LogsIndexesApi(ddConfig);
+  const data = await apiInstance.listLogIndexes();
+  const indexes = []
+  data.indexes.forEach(i => indexes.push(i.name))
+  const exist = indexes.includes(index)
+
+  if (!exist) {
+    console.error(`Index "${index}" doesn't exist.`)
+    console.info(`All existing index: ${JSON.stringify(indexes, null, 2)}`)
+    console.info(`"${index}" might be a historical index`)
+  }
+  return exist
+}
+
+const checkInput = async (ddConfig) => {
   if (!isValidInput()) {
     if (process.platform === 'win32') {
       console.error(USAGE_win32)
@@ -82,6 +110,11 @@ const checkInput = () => {
   }
 
   DD_INDEX = DD_INDEX ? DD_INDEX : 'main'
+
+  if (!(await isValidIndex(ddConfig, DD_INDEX))) {
+    process.exit(1);
+  }
+
   DD_OUTPUT = DD_OUTPUT ? DD_OUTPUT : 'exported.csv'
   const strs = DD_OUTPUT.split('.')
   DD_FORMAT = strs[strs.length - 1]
@@ -96,6 +129,7 @@ const checkInput = () => {
     DD_TO,
     DD_OUTPUT,
     DD_FORMAT,
+    DD_SLEEP,
   }
 
   console.dir(params)
@@ -105,7 +139,7 @@ const checkInput = () => {
   return params
 }
 
-const createDataDogClient = () => {
+const createDataDogConfig = () => {
   const configurationOpts = {
     debug: false,
     authMethods: {
@@ -119,12 +153,12 @@ const createDataDogClient = () => {
     site: DD_SITE
   })
 
-  return new v2.LogsApi(configuration)
+  return configuration
 }
 
 
 const intercepter = (logs) => {
-  if(!logger) {
+  if (!logger) {
     logger = fs.createWriteStream(DD_OUTPUT)
     logger.write('') // clear existing content
     logger = fs.createWriteStream(DD_OUTPUT, {
@@ -133,14 +167,14 @@ const intercepter = (logs) => {
     logger.write('Date,Message')
   }
 
-  if(logs && logs.length > 0) {
+  if (logs && logs.length > 0) {
     total += logs.length
-    for(const log of logs) {
+    for (const log of logs) {
       let jsonLog = {
         date: log.attributes.timestamp.toISOString(),
         message: log.attributes.message
       }
-  
+
       logger.write(`\n"${jsonLog.date}","${jsonLog.message}"`)
     }
   }
@@ -150,7 +184,12 @@ const endCallback = () => {
   logger.end()
 }
 
-const getLogs = async (ddClient, intercepter) => {
+const sleep = (ms) => {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const getLogs = async (ddConfig, intercepter) => {
+  const apiInstance = new v2.LogsApi(ddConfig)
   const params = {
     filterQuery: DD_QUERY,
     filterIndex: DD_INDEX,
@@ -164,16 +203,23 @@ const getLogs = async (ddClient, intercepter) => {
   do {
     console.log(`Requesting page ${++n}`)
     const query = nextPage ? { ...params, pageCursor: nextPage } : params
-    const result = await ddClient.listLogsGet(query)
+    let result
+    try {
+      result = await apiInstance.listLogsGet(query)
+    } catch (error) {
+      console.error(error.toString())
+      process.exit(1)
+    }
+    await sleep(DD_SLEEP) // avoid 429 too many request error
     intercepter(result.data)
     nextPage = result?.meta?.page?.after
   } while (nextPage)
 }
 
 const main = async () => {
-  const inputs = checkInput()
-  const ddClient = createDataDogClient()
-  await getLogs(ddClient, intercepter, endCallback)
+  const ddConfig = createDataDogConfig()
+  const inputs = await checkInput(ddConfig)
+  await getLogs(ddConfig, intercepter, endCallback)
   console.log(`downloaded ${total} logs`)
 }
 
