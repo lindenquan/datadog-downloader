@@ -9,14 +9,15 @@ let {
   DD_SITE,
   DD_API_KEY,
   DD_APP_KEY,
-  DD_INDEX,
+  DD_INDEXES,
   DD_QUERY,
   DD_FROM,
   DD_TO,
   DD_OUTPUT,
   DD_SLEEP,
+  DD_COLUMNS,
 } = process.env
-// const apiInstance = new v2.LogsApi(configuration)
+
 let DD_FORMAT
 let total = 0
 const TIEM_FORMAT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?([+-]\d\d:\d\d)|Z$/i
@@ -25,33 +26,48 @@ Usage:
 set DD_SITE=datadoghq.com # or DD_SITE=datadoghq.eu
 set DD_API_KEY=api-key
 set DD_APP_KEY=app-key
-set DD_INDEX=main
+set DD_INDEXES=main
 set DD_FROM=2023-02-06T03:24:00Z
 set DD_TO=2023-02-06T03:25:00Z
 set DD_OUTPUT=exported.csv
 set DD_QUERY=service:*
 set DD_SLEEP=1000
+set DD_COLUMNS='ate,Message
 
 npm exec dd-downloader
 `
 const USAGE = `
 Usage:
-export DD_SITE='datadoghq.com' # or DD_SITE='datadoghq.eu'
+# required params
 export DD_API_KEY=''
 export DD_APP_KEY=''
-export DD_INDEX='main'
-export DD_FROM=''
-export DD_TO=''
-export DD_OUTPUT='exported.csv'
-export DD_QUERY='service:*'
-export DD_SLEEP='1000'
+
+# optional params with default values
+export DD_SITE='datadoghq.com'               # EU URL 'datadoghq.eu'
+export DD_INDEXES='*'
+export DD_FROM='2023-02-06T03:14:00-05:30'   # ISO 8601 format with timezone, default: last 10 min from current time
+export DD_TO='2023-02-06T03:24:00-05:30'     # ISO 8601 format with timezone, default: current time
+export DD_OUTPUT='exported.csv'              # extension must be csv
+export DD_QUERY='*'
+export DD_SLEEP='1000'                       # time unit is ms
+export DD_COLUMNS='Date,Message'             # supported columns: 'Date,Host,Service,Message,Status' case insensitive
 
 npm exec dd-downloader
 `
+const ALL_COLUMNS = ['Date', 'Host', 'Service', 'Message', 'Status']
+const DEFAULT_COLUMNS = 'Date, Message'
+const DEFAULT_DURATION = 1000 * 60 * 10 // 10 min
 let logger
 
+Object.defineProperty(String.prototype, 'capitalize', {
+  value: function () {
+    return this.charAt(0).toUpperCase() + this.slice(1).toLowerCase();
+  },
+  enumerable: false
+});
+
 const isValidInput = () => {
-  if (!DD_API_KEY || !DD_APP_KEY || !DD_QUERY || !DD_FROM || !DD_TO) {
+  if (!DD_API_KEY || !DD_APP_KEY) {
     console.error(`required parameters: 'DD_API_KEY', 'DD_APP_KEY', 'DD_QUERY', 'DD_FROM', 'DD_TO'`)
     return false
   }
@@ -71,12 +87,32 @@ const isValidInput = () => {
     return false
   }
 
-  DD_SLEEP = new Number(DD_SLEEP)
-  if(isNaN(DD_SLEEP) || DD_SLEEP < 0) {
-    console.error(`'DD_SLEEP' must be greater than 0`)
-    return false
+  if (DD_SLEEP) {
+    DD_SLEEP = new Number(DD_SLEEP)
+    if (isNaN(DD_SLEEP) || DD_SLEEP < 0) {
+      console.error(`'DD_SLEEP' must be greater than 0`)
+      return false
+    }
   }
 
+  return true
+}
+
+const isValidColumns = (columns) => {
+  let columList = []
+  if (columns) {
+    columns = columns.split(',')
+    for (let col of columns) {
+      col = col.trim().capitalize()
+      if (!ALL_COLUMNS.includes(col)) {
+        console.error(`Column "${col}" is not supported`)
+        return false;
+      }
+      columList.push(col)
+    }
+  }
+
+  DD_COLUMNS = columList
   return true
 }
 
@@ -94,7 +130,6 @@ const isValidIndex = async (ddConfig, index) => {
   if (!exist) {
     console.error(`Index "${index}" doesn't exist.`)
     console.info(`All existing index: ${JSON.stringify(indexes, null, 2)}`)
-    console.info(`"${index}" might be a historical index`)
   }
   return exist
 }
@@ -109,27 +144,33 @@ const checkInput = async (ddConfig) => {
     process.exit(1)
   }
 
-  DD_INDEX = DD_INDEX ? DD_INDEX : 'main'
+  if (!isValidColumns(DD_COLUMNS)) {
+    process.exit(1);
+  }
 
-  // if (!(await isValidIndex(ddConfig, DD_INDEX))) {
-  //   process.exit(1);
-  // }
-
-  DD_OUTPUT = DD_OUTPUT ? DD_OUTPUT : 'exported.csv'
   const strs = DD_OUTPUT.split('.')
   DD_FORMAT = strs[strs.length - 1]
   DD_OUTPUT = path.resolve(DD_OUTPUT)
-  DD_SITE = DD_SITE ? DD_SITE : 'datadoghq.com'
 
+  const indexStrList = DD_INDEXES.split(',')
+  const indexList = []
+  for (let i of indexStrList) {
+    if (i) {
+      indexList.push(i)
+    }
+  }
+
+  DD_INDEXES = indexList
   const params = {
     DD_SITE,
-    DD_INDEX,
+    DD_INDEXES,
     DD_QUERY,
     DD_FROM,
     DD_TO,
     DD_OUTPUT,
     DD_FORMAT,
     DD_SLEEP,
+    DD_COLUMNS
   }
 
   console.dir(params)
@@ -164,18 +205,32 @@ const intercepter = (logs) => {
     logger = fs.createWriteStream(DD_OUTPUT, {
       flags: 'a' // 'a' means appending
     })
-    logger.write('Date,Message')
+
+    let logStr = ''
+    for (let col of DD_COLUMNS) {
+      logStr += `${col},`
+    }
+
+    logger.write(logStr.slice(0, -1))
   }
 
   if (logs && logs.length > 0) {
     total += logs.length
     for (const log of logs) {
       let jsonLog = {
-        date: log.attributes.timestamp.toISOString(),
-        message: log.attributes.message
+        Date: log.attributes.timestamp.toISOString(),
+        Host: log.attributes.host,
+        Service: log.attributes.service,
+        Status: log.attributes.status,
+        Message: log.attributes.message,
       }
 
-      logger.write(`\n"${jsonLog.date}","${jsonLog.message}"`)
+      let logStr = ''
+      for (let col of DD_COLUMNS) {
+        logStr += `"${jsonLog[col]}",`
+      }
+
+      logger.write(`\n${logStr.slice(0, -1)}`)
     }
   }
 }
@@ -190,19 +245,10 @@ const sleep = (ms) => {
 
 const getLogs = async (ddConfig, intercepter) => {
   const apiInstance = new v2.LogsApi(ddConfig)
-  // const params = {
-  //   filterQuery: DD_QUERY,
-  //   filterIndex: DD_INDEX,
-  //   filterFrom: new Date(DD_FROM),
-  //   filterTo: new Date(DD_TO),
-  //   pageLimit: 5000,
-  //   sort: 'timestamp' // timestamp ascending
-  // }
-
   const params = {
     body: {
       filter: {
-        indexes: [DD_INDEX],
+        indexes: DD_INDEXES,
         from: DD_FROM,
         to: DD_TO,
         query: DD_QUERY,
@@ -218,14 +264,13 @@ const getLogs = async (ddConfig, intercepter) => {
   let n = 0
   do {
     console.log(`Requesting page ${++n}`)
-    if(nextPage) {
+    if (nextPage) {
       params.body.page.cursor = nextPage
     }
     let result
     try {
       result = await apiInstance.listLogs(params)
     } catch (error) {
-      throw error
       console.error(error.toString())
       process.exit(1)
     }
@@ -235,7 +280,23 @@ const getLogs = async (ddConfig, intercepter) => {
   } while (nextPage)
 }
 
+const setDefaultValues = () => {
+  DD_OUTPUT = DD_OUTPUT ? DD_OUTPUT : 'exported.csv'
+  DD_SITE = DD_SITE ? DD_SITE : 'datadoghq.com'
+  DD_SLEEP = DD_SLEEP ? DD_SLEEP : 1000
+  DD_COLUMNS = DD_COLUMNS ? DD_COLUMNS : DEFAULT_COLUMNS
+  DD_QUERY = DD_QUERY ? DD_QUERY : '*'
+  DD_INDEXES = DD_INDEXES ? DD_INDEXES : '*'
+  if (!DD_INDEXES) {
+    DD_INDEXES = '*'
+    console.info(`Index "*" doesn't include historical indexes. If you want to search on a historical index, you need to specify it.`)
+  }
+  DD_FROM = DD_FROM ? DD_FROM : new Date(new Date().getTime() - DEFAULT_DURATION).toISOString()
+  DD_TO = DD_TO ? DD_TO : new Date().toISOString()
+}
+
 const main = async () => {
+  setDefaultValues()
   const ddConfig = createDataDogConfig()
   const inputs = await checkInput(ddConfig)
   await getLogs(ddConfig, intercepter, endCallback)
