@@ -1,7 +1,7 @@
 {
     "name": "dd-downloader",
     "description": "Download logs from DataDog",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "bin": "./index.mjs",
     "author": "Linden Quan",
     "license": "ISC",

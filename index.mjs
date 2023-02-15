@@ -111,9 +111,9 @@ const checkInput = async (ddConfig) => {
 
   DD_INDEX = DD_INDEX ? DD_INDEX : 'main'
 
-  if (!(await isValidIndex(ddConfig, DD_INDEX))) {
-    process.exit(1);
-  }
+  // if (!(await isValidIndex(ddConfig, DD_INDEX))) {
+  //   process.exit(1);
+  // }
 
   DD_OUTPUT = DD_OUTPUT ? DD_OUTPUT : 'exported.csv'
   const strs = DD_OUTPUT.split('.')
@@ -190,23 +190,42 @@ const sleep = (ms) => {
 
 const getLogs = async (ddConfig, intercepter) => {
   const apiInstance = new v2.LogsApi(ddConfig)
+  // const params = {
+  //   filterQuery: DD_QUERY,
+  //   filterIndex: DD_INDEX,
+  //   filterFrom: new Date(DD_FROM),
+  //   filterTo: new Date(DD_TO),
+  //   pageLimit: 5000,
+  //   sort: 'timestamp' // timestamp ascending
+  // }
+
   const params = {
-    filterQuery: DD_QUERY,
-    filterIndex: DD_INDEX,
-    filterFrom: new Date(DD_FROM),
-    filterTo: new Date(DD_TO),
-    pageLimit: 5000,
-    sort: 'timestamp' // timestamp ascending
+    body: {
+      filter: {
+        indexes: [DD_INDEX],
+        from: DD_FROM,
+        to: DD_TO,
+        query: DD_QUERY,
+      },
+      page: {
+        cursor: undefined,
+        limit: 5000,
+      },
+      sort: 'timestamp' // timestamp ascending
+    }
   }
   let nextPage = null
   let n = 0
   do {
     console.log(`Requesting page ${++n}`)
-    const query = nextPage ? { ...params, pageCursor: nextPage } : params
+    if(nextPage) {
+      params.body.page.cursor = nextPage
+    }
     let result
     try {
-      result = await apiInstance.listLogsGet(query)
+      result = await apiInstance.listLogs(params)
     } catch (error) {
+      throw error
       console.error(error.toString())
       process.exit(1)
     }
