@@ -13,7 +13,7 @@ export DD_FROM='2023-02-06T03:14:00-05:30'   # ISO 8601 format with timezone, de
 export DD_TO='2023-02-06T03:24:00-05:30'     # ISO 8601 format with timezone, default: current time
 export DD_OUTPUT='exported.csv'              # extension must be csv
 export DD_QUERY='*'
-export DD_SLEEP='1000'                       # time unit is ms
+export DD_SLEEP='1000'                       # time unit is ms, this is used to avoid 429 error
 export DD_COLUMNS='Date,Message'             # supported columns: 'Date,Host,Service,Message,Status' case insensitive
 
 npm exec dd-downloader

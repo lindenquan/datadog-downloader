@@ -2,7 +2,7 @@
     "name": "dd-downloader",
     "description": "Download logs from DataDog",
     "keywords": ["datadog", "downloader", "csv"],
-    "version": "1.0.0",
+    "version": "1.0.1",
     "bin": "./index.mjs",
     "author": "Linden Quan",
     "license": "ISC",
